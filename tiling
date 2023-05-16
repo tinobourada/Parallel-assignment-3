@@ -1,0 +1,92 @@
+#include <stdio.h>
+
+#define M 1024
+#define N 1024
+#define K 1024
+#define TILE_SIZE 32
+
+__global__ void matrixMultiplyTiled(float* A, float* B, float* C, int m, int n, int k) {
+    __shared__ float ds_A[TILE_SIZE][TILE_SIZE];
+    __shared__ float ds_B[TILE_SIZE][TILE_SIZE];
+
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int Row = by * TILE_SIZE + ty;
+    int Col = bx * TILE_SIZE + tx;
+    float Cvalue = 0.0;
+
+    for (int t = 0; t < (k - 1) / TILE_SIZE + 1; t++) {
+        if (Row < m && t * TILE_SIZE + tx < k) {
+            ds_A[ty][tx] = A[Row * k + t * TILE_SIZE + tx];
+        } else {
+            ds_A[ty][tx] = 0.0;
+        }
+
+        if (Col < n && t * TILE_SIZE + ty < k) {
+            ds_B[ty][tx] = B[(t * TILE_SIZE + ty) * n + Col];
+        } else {
+            ds_B[ty][tx] = 0.0;
+        }
+
+        __syncthreads();
+
+        for (int i = 0; i < TILE_SIZE; i++) {
+            Cvalue += ds_A[ty][i] * ds_B[i][tx];
+        }
+
+        __syncthreads();
+    }
+
+    if (Row < m && Col < n) {
+        C[Row * n + Col] = Cvalue;
+    }
+}
+
+int main() {
+    float *A, *B, *C;
+    float *d_A, *d_B, *d_C;
+    int size_A = M * K * sizeof(float);
+    int size_B = K * N * sizeof(float);
+    int size_C = M * N * sizeof(float);
+
+    // Allocate host memory
+    A = (float*)malloc(size_A);
+    B = (float*)malloc(size_B);
+    C = (float*)malloc(size_C);
+
+    // Initialize matrices A and B with some values
+
+    // Allocate device memory
+    cudaMalloc((void**)&d_A, size_A);
+    cudaMalloc((void**)&d_B, size_B);
+    cudaMalloc((void**)&d_C, size_C);
+
+    // Transfer data from host to device memory
+    cudaMemcpy(d_A, A, size_A, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, size_B, cudaMemcpyHostToDevice);
+
+    // Set grid and block dimensions
+    dim3 blockDim(TILE_SIZE, TILE_SIZE);
+    dim3 gridDim((N + TILE_SIZE - 1) / TILE_SIZE, (M + TILE_SIZE - 1) / TILE_SIZE);
+
+    // Launch kernel
+    matrixMultiplyTiled<<<gridDim, blockDim>>>(d_A, d_B, d_C, M, N, K);
+
+    // Transfer result from device to host memory
+    cudaMemcpy(C, d_C, size_C, cudaMemcpyDeviceToHost);
+
+    // Free device memory
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+
+    // Free host memory
+    free(A);
+    free(B);
+    free(C);
+
+    return 0;
+}
